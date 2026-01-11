@@ -14,7 +14,7 @@ local Camera = Workspace.CurrentCamera
 
 -- Create Window
 local Window = Library:CreateWindow({
-    Title = 'drax universal v1.0',
+    Title = 'drax universal v1.0 + Aimbot',
     Center = true,
     AutoShow = true,
     TabPadding = 8,
@@ -23,11 +23,338 @@ local Window = Library:CreateWindow({
 
 -- Create Tabs
 local Tabs = {
+    Combat = Window:AddTab('Combat'),
     Player = Window:AddTab('Player'),
     Visual = Window:AddTab('Visual'),
     Misc = Window:AddTab('Misc'),
     ['UI Settings'] = Window:AddTab('UI Settings'),
 }
+
+-- ==================== COMBAT TAB (AIMBOT) ====================
+local AimbotBox = Tabs.Combat:AddLeftGroupbox('Aimbot Settings')
+local AimbotVisualBox = Tabs.Combat:AddRightGroupbox('Aimbot Visual')
+
+-- Aimbot Variables
+getgenv().Aimbot = {
+    Enabled = false,
+    TeamCheck = true,
+    AliveCheck = true,
+    WallCheck = false,
+    VisibleCheck = true,
+    FOV = 120,
+    Smoothness = 0.15,
+    AimPart = "Head",
+    PredictMovement = false,
+    PredictionAmount = 0.13,
+    IgnoreForcefield = true,
+    MaxDistance = 1000,
+    ShowFOV = true,
+    FOVColor = Color3.fromRGB(255, 255, 255),
+    FOVTransparency = 0.5,
+    FOVFilled = false,
+    TargetHighlight = true,
+    HighlightColor = Color3.fromRGB(255, 0, 0),
+    RightClickAim = true,
+    CurrentTarget = nil,
+    IsAiming = false
+}
+
+-- FOV Circle
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Visible = false
+FOVCircle.Thickness = 2
+FOVCircle.NumSides = 50
+FOVCircle.Radius = getgenv().Aimbot.FOV
+FOVCircle.Filled = false
+FOVCircle.Transparency = 1
+FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+
+-- Target Highlight
+local TargetHighlight = nil
+
+-- Aimbot Functions
+local function GetClosestPlayerToCursor()
+    local closestPlayer = nil
+    local shortestDistance = math.huge
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if not player.Character then continue end
+        
+        local character = player.Character
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        local aimPart = character:FindFirstChild(getgenv().Aimbot.AimPart)
+        
+        if not aimPart or not rootPart or not humanoid then continue end
+        
+        -- Team Check
+        if getgenv().Aimbot.TeamCheck and player.Team == LocalPlayer.Team then continue end
+        
+        -- Alive Check
+        if getgenv().Aimbot.AliveCheck and humanoid.Health <= 0 then continue end
+        
+        -- Forcefield Check
+        if getgenv().Aimbot.IgnoreForcefield and character:FindFirstChildOfClass("ForceField") then continue end
+        
+        -- Distance Check
+        local distance = (rootPart.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+        if distance > getgenv().Aimbot.MaxDistance then continue end
+        
+        -- Wall Check
+        if getgenv().Aimbot.WallCheck then
+            local raycastParams = RaycastParams.new()
+            raycastParams.FilterDescendantsInstances = {LocalPlayer.Character, character}
+            raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+            raycastParams.IgnoreWater = true
+            
+            local rayResult = Workspace:Raycast(
+                Camera.CFrame.Position,
+                (aimPart.Position - Camera.CFrame.Position).Unit * distance,
+                raycastParams
+            )
+            
+            if rayResult then continue end
+        end
+        
+        -- Visible Check (simple version)
+        if getgenv().Aimbot.VisibleCheck then
+            local screenPos, onScreen = Camera:WorldToViewportPoint(aimPart.Position)
+            if not onScreen then continue end
+        end
+        
+        -- FOV Check
+        local screenPos = Camera:WorldToViewportPoint(aimPart.Position)
+        local mousePos = UserInputService:GetMouseLocation()
+        local distanceFromMouse = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+        
+        if distanceFromMouse < getgenv().Aimbot.FOV and distanceFromMouse < shortestDistance then
+            closestPlayer = player
+            shortestDistance = distanceFromMouse
+        end
+    end
+    
+    return closestPlayer
+end
+
+local function GetPredictedPosition(part)
+    if not getgenv().Aimbot.PredictMovement then
+        return part.Position
+    end
+    
+    local velocity = part.AssemblyLinearVelocity
+    return part.Position + (velocity * getgenv().Aimbot.PredictionAmount)
+end
+
+local function AimAt(position)
+    local currentCFrame = Camera.CFrame
+    local targetCFrame = CFrame.new(currentCFrame.Position, position)
+    
+    -- Smooth aiming
+    local smoothness = getgenv().Aimbot.Smoothness
+    Camera.CFrame = currentCFrame:Lerp(targetCFrame, 1 - smoothness)
+end
+
+-- Aimbot Settings
+AimbotBox:AddToggle('AimbotEnabled', {
+    Text = 'Enable Aimbot',
+    Default = false,
+    Callback = function(Value)
+        getgenv().Aimbot.Enabled = Value
+        if not Value then
+            getgenv().Aimbot.IsAiming = false
+            getgenv().Aimbot.CurrentTarget = nil
+            if TargetHighlight then
+                TargetHighlight:Destroy()
+                TargetHighlight = nil
+            end
+        end
+    end
+})
+
+AimbotBox:AddDivider()
+
+AimbotBox:AddLabel('Trigger: Right Click'):AddKeyPicker('AimbotKey', {
+    Default = 'MouseButton2',
+    Text = 'Aim Key',
+    Mode = 'Hold',
+    Callback = function()
+        -- Handled in main loop
+    end
+})
+
+AimbotBox:AddDropdown('AimPart', {
+    Values = {'Head', 'Torso', 'HumanoidRootPart', 'UpperTorso', 'LowerTorso'},
+    Default = 1,
+    Multi = false,
+    Text = 'Aim Part',
+    Callback = function(Value)
+        getgenv().Aimbot.AimPart = Value
+    end
+})
+
+AimbotBox:AddSlider('AimbotFOV', {
+    Text = 'FOV Size',
+    Default = 120,
+    Min = 20,
+    Max = 500,
+    Rounding = 0,
+    Callback = function(Value)
+        getgenv().Aimbot.FOV = Value
+        FOVCircle.Radius = Value
+    end
+})
+
+AimbotBox:AddSlider('AimbotSmooth', {
+    Text = 'Smoothness',
+    Default = 0.15,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Callback = function(Value)
+        getgenv().Aimbot.Smoothness = Value
+    end
+})
+
+AimbotBox:AddSlider('MaxDistance', {
+    Text = 'Max Distance (studs)',
+    Default = 1000,
+    Min = 100,
+    Max = 5000,
+    Rounding = 0,
+    Callback = function(Value)
+        getgenv().Aimbot.MaxDistance = Value
+    end
+})
+
+AimbotBox:AddDivider()
+
+AimbotBox:AddToggle('TeamCheck', {
+    Text = 'Team Check',
+    Default = true,
+    Callback = function(Value)
+        getgenv().Aimbot.TeamCheck = Value
+    end
+})
+
+AimbotBox:AddToggle('AliveCheck', {
+    Text = 'Alive Check',
+    Default = true,
+    Callback = function(Value)
+        getgenv().Aimbot.AliveCheck = Value
+    end
+})
+
+AimbotBox:AddToggle('WallCheck', {
+    Text = 'Wall Check',
+    Default = false,
+    Callback = function(Value)
+        getgenv().Aimbot.WallCheck = Value
+    end
+})
+
+AimbotBox:AddToggle('VisibleCheck', {
+    Text = 'Visible Check',
+    Default = true,
+    Callback = function(Value)
+        getgenv().Aimbot.VisibleCheck = Value
+    end
+})
+
+AimbotBox:AddToggle('IgnoreForcefield', {
+    Text = 'Ignore Forcefield',
+    Default = true,
+    Callback = function(Value)
+        getgenv().Aimbot.IgnoreForcefield = Value
+    end
+})
+
+AimbotBox:AddDivider()
+
+AimbotBox:AddToggle('PredictMovement', {
+    Text = 'Predict Movement',
+    Default = false,
+    Callback = function(Value)
+        getgenv().Aimbot.PredictMovement = Value
+    end
+})
+
+AimbotBox:AddSlider('PredictionAmount', {
+    Text = 'Prediction Strength',
+    Default = 0.13,
+    Min = 0,
+    Max = 0.5,
+    Rounding = 2,
+    Callback = function(Value)
+        getgenv().Aimbot.PredictionAmount = Value
+    end
+})
+
+-- Visual Settings
+AimbotVisualBox:AddToggle('ShowFOV', {
+    Text = 'Show FOV Circle',
+    Default = true,
+    Callback = function(Value)
+        getgenv().Aimbot.ShowFOV = Value
+        FOVCircle.Visible = Value
+    end
+})
+
+AimbotVisualBox:AddToggle('FOVFilled', {
+    Text = 'FOV Filled',
+    Default = false,
+    Callback = function(Value)
+        getgenv().Aimbot.FOVFilled = Value
+        FOVCircle.Filled = Value
+    end
+})
+
+AimbotVisualBox:AddSlider('FOVTransparency', {
+    Text = 'FOV Transparency',
+    Default = 50,
+    Min = 0,
+    Max = 100,
+    Rounding = 0,
+    Callback = function(Value)
+        getgenv().Aimbot.FOVTransparency = Value / 100
+        FOVCircle.Transparency = 1 - (Value / 100)
+    end
+})
+
+AimbotVisualBox:AddLabel('FOV Color'):AddColorPicker('FOVColor', {
+    Default = Color3.fromRGB(255, 255, 255),
+    Title = 'FOV Circle Color',
+    Callback = function(Value)
+        getgenv().Aimbot.FOVColor = Value
+        FOVCircle.Color = Value
+    end
+})
+
+AimbotVisualBox:AddDivider()
+
+AimbotVisualBox:AddToggle('TargetHighlight', {
+    Text = 'Highlight Target',
+    Default = true,
+    Callback = function(Value)
+        getgenv().Aimbot.TargetHighlight = Value
+        if not Value and TargetHighlight then
+            TargetHighlight:Destroy()
+            TargetHighlight = nil
+        end
+    end
+})
+
+AimbotVisualBox:AddLabel('Highlight Color'):AddColorPicker('HighlightColor', {
+    Default = Color3.fromRGB(255, 0, 0),
+    Title = 'Target Highlight Color',
+    Callback = function(Value)
+        getgenv().Aimbot.HighlightColor = Value
+    end
+})
+
+AimbotVisualBox:AddDivider()
+
+AimbotVisualBox:AddLabel('Current Target: None')
 
 -- ==================== PLAYER TAB ====================
 local MovementBox = Tabs.Player:AddLeftGroupbox('Movement')
@@ -465,23 +792,16 @@ TeleportBox:AddButton({
 })
 
 -- ==================== RECENT PLAYERS ====================
--- Track recent players
 getgenv().RecentPlayers = getgenv().RecentPlayers or {}
 getgenv().SelectedRecentPlayer = nil
 
--- Function to get recent players from Roblox API
 local function GetRecentPlayers()
     local success, result = pcall(function()
         local HttpService = game:GetService("HttpService")
         local userId = LocalPlayer.UserId
         
-        -- Get recent players from Roblox presence API
-        local url = string.format("https://presence.roblox.com/v1/presence/users")
-        
-        -- This uses Roblox's recent players from the social tab
         local recentList = {}
         
-        -- Get from current server first
         for _, player in pairs(Players:GetPlayers()) do
             if player ~= LocalPlayer then
                 table.insert(recentList, {
@@ -503,12 +823,10 @@ local function GetRecentPlayers()
     end
 end
 
--- Function to join player's server
 local function JoinPlayerServer(userId)
     local success, result = pcall(function()
         local HttpService = game:GetService("HttpService")
         
-        -- Get user's current game info
         local url = string.format("https://presence.roblox.com/v1/presence/users")
         local response = HttpService:JSONDecode(
             game:HttpPost(url, HttpService:JSONEncode({
@@ -519,7 +837,7 @@ local function JoinPlayerServer(userId)
         if response and response.userPresences and #response.userPresences > 0 then
             local presence = response.userPresences[1]
             
-            if presence.userPresenceType == 2 then -- In game
+            if presence.userPresenceType == 2 then
                 local placeId = presence.placeId
                 local jobId = presence.gameId
                 
@@ -541,7 +859,6 @@ local function JoinPlayerServer(userId)
     end
 end
 
--- Update recent players list
 local function UpdateRecentPlayers()
     local recentPlayers = GetRecentPlayers()
     local nameList = {}
@@ -562,14 +879,12 @@ local function UpdateRecentPlayers()
     return #nameList
 end
 
--- Recent Players Dropdown
 RecentPlayersBox:AddDropdown('RecentPlayerSelect', {
     Values = {"Click refresh to load..."},
     Default = 1,
     Multi = false,
     Text = 'Select Recent Player',
     Callback = function(Value)
-        -- Extract player name from "Name (Status)" format
         local playerName = Value:match("^(.+)%s%(")
         if playerName then
             for _, player in pairs(getgenv().RecentPlayers) do
@@ -582,7 +897,6 @@ RecentPlayersBox:AddDropdown('RecentPlayerSelect', {
     end
 })
 
--- Refresh Recent Players
 RecentPlayersBox:AddButton({
     Text = 'Refresh Recent Players',
     Func = function()
@@ -592,14 +906,12 @@ RecentPlayersBox:AddButton({
     Tooltip = 'Update the recent players list'
 })
 
--- Join Recent Player
 RecentPlayersBox:AddButton({
     Text = 'Join Selected Player',
     Func = function()
         if getgenv().SelectedRecentPlayer then
             local player = getgenv().SelectedRecentPlayer
             
-            -- If player is in current server, just teleport
             if player.Status == "In This Server" then
                 local targetPlayer = Players:FindFirstChild(player.Name)
                 if targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
@@ -607,7 +919,6 @@ RecentPlayersBox:AddButton({
                     Library:Notify('Teleported to ' .. player.Name, 2)
                 end
             else
-                -- Try to join their server
                 JoinPlayerServer(player.UserId)
             end
         else
@@ -678,7 +989,6 @@ GameBox:AddButton({
 
 GameBox:AddDivider()
 
--- Store JobId
 getgenv().CustomJobId = ""
 
 GameBox:AddInput('CustomJobID', {
@@ -797,8 +1107,6 @@ GameBox:AddButton({
 
 GameBox:AddDivider()
 
-GameBox:AddDivider()
-
 GameBox:AddLabel('Place ID: ' .. game.PlaceId)
 GameBox:AddLabel('Current Job ID: ' .. game.JobId:sub(1, 20) .. '...')
 
@@ -880,6 +1188,101 @@ Players.PlayerRemoving:Connect(function()
 end)
 
 -- ==================== MAIN LOOPS ====================
+
+-- Aimbot Loop
+RunService.RenderStepped:Connect(function()
+    pcall(function()
+        -- Update FOV Circle Position
+        local mousePos = UserInputService:GetMouseLocation()
+        FOVCircle.Position = mousePos
+        FOVCircle.Visible = getgenv().Aimbot.ShowFOV and getgenv().Aimbot.Enabled
+        
+        -- Check if right click is held
+        local isRightClickHeld = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+        
+        if getgenv().Aimbot.Enabled and isRightClickHeld then
+            getgenv().Aimbot.IsAiming = true
+            
+            local target = GetClosestPlayerToCursor()
+            getgenv().Aimbot.CurrentTarget = target
+            
+            if target and target.Character then
+                local aimPart = target.Character:FindFirstChild(getgenv().Aimbot.AimPart)
+                
+                if aimPart then
+                    -- Update target label
+                    for _, v in pairs(Tabs.Combat:GetChildren()) do
+                        if v.Name == "AimbotVisualBox" then
+                            for _, label in pairs(v:GetDescendants()) do
+                                if label:IsA("TextLabel") and label.Text:find("Current Target:") then
+                                    label.Text = "Current Target: " .. target.Name
+                                end
+                            end
+                        end
+                    end
+                    
+                    -- Apply highlight to target
+                    if getgenv().Aimbot.TargetHighlight then
+                        if not TargetHighlight or TargetHighlight.Parent ~= target.Character then
+                            if TargetHighlight then
+                                TargetHighlight:Destroy()
+                            end
+                            
+                            TargetHighlight = Instance.new("Highlight")
+                            TargetHighlight.Name = "AimbotTargetHighlight"
+                            TargetHighlight.Parent = target.Character
+                            TargetHighlight.FillColor = getgenv().Aimbot.HighlightColor
+                            TargetHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+                            TargetHighlight.FillTransparency = 0.5
+                            TargetHighlight.OutlineTransparency = 0
+                        end
+                    end
+                    
+                    -- Aim at predicted position
+                    local targetPos = GetPredictedPosition(aimPart)
+                    AimAt(targetPos)
+                end
+            else
+                -- Clear target label
+                for _, v in pairs(Tabs.Combat:GetChildren()) do
+                    if v.Name == "AimbotVisualBox" then
+                        for _, label in pairs(v:GetDescendants()) do
+                            if label:IsA("TextLabel") and label.Text:find("Current Target:") then
+                                label.Text = "Current Target: None"
+                            end
+                        end
+                    end
+                end
+                
+                -- Remove highlight
+                if TargetHighlight then
+                    TargetHighlight:Destroy()
+                    TargetHighlight = nil
+                end
+            end
+        else
+            getgenv().Aimbot.IsAiming = false
+            getgenv().Aimbot.CurrentTarget = nil
+            
+            -- Clear target label when not aiming
+            for _, v in pairs(Tabs.Combat:GetChildren()) do
+                if v.Name == "AimbotVisualBox" then
+                    for _, label in pairs(v:GetDescendants()) do
+                        if label:IsA("TextLabel") and label.Text:find("Current Target:") then
+                            label.Text = "Current Target: None"
+                        end
+                    end
+                end
+            end
+            
+            -- Remove highlight when not aiming
+            if TargetHighlight then
+                TargetHighlight:Destroy()
+                TargetHighlight = nil
+            end
+        end
+    end)
+end)
 
 -- Movement Loop
 RunService.Heartbeat:Connect(function()
@@ -1004,5 +1407,6 @@ pcall(function()
 end)
 
 -- Load notification
-Library:Notify('drax universal v1.0 loaded!', 3)
-print('drax universal v1.0 | All features loaded!')
+Library:Notify('drax universal v1.0 + Aimbot loaded!', 3)
+print('drax universal v1.0 + Aimbot | All features loaded!')
+print('Aimbot: Right Click to aim at closest target in FOV')
