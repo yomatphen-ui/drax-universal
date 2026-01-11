@@ -59,15 +59,18 @@ getgenv().Aimbot = {
     IsAiming = false
 }
 
--- FOV Circle
-local FOVCircle = Drawing.new("Circle")
-FOVCircle.Visible = false
-FOVCircle.Thickness = 2
-FOVCircle.NumSides = 50
-FOVCircle.Radius = getgenv().Aimbot.FOV
-FOVCircle.Filled = false
-FOVCircle.Transparency = 1
-FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+-- FOV Circle (with pcall for safety)
+local FOVCircle = nil
+pcall(function()
+    FOVCircle = Drawing.new("Circle")
+    FOVCircle.Visible = false
+    FOVCircle.Thickness = 2
+    FOVCircle.NumSides = 50
+    FOVCircle.Radius = getgenv().Aimbot.FOV
+    FOVCircle.Filled = false
+    FOVCircle.Transparency = 1
+    FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+end)
 
 -- Target Highlight
 local TargetHighlight = nil
@@ -98,26 +101,28 @@ local function GetClosestPlayerToCursor()
         if getgenv().Aimbot.IgnoreForcefield and character:FindFirstChildOfClass("ForceField") then continue end
         
         -- Distance Check
-        local distance = (rootPart.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
-        if distance > getgenv().Aimbot.MaxDistance then continue end
-        
-        -- Wall Check
-        if getgenv().Aimbot.WallCheck then
-            local raycastParams = RaycastParams.new()
-            raycastParams.FilterDescendantsInstances = {LocalPlayer.Character, character}
-            raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
-            raycastParams.IgnoreWater = true
+        if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local distance = (rootPart.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+            if distance > getgenv().Aimbot.MaxDistance then continue end
             
-            local rayResult = Workspace:Raycast(
-                Camera.CFrame.Position,
-                (aimPart.Position - Camera.CFrame.Position).Unit * distance,
-                raycastParams
-            )
-            
-            if rayResult then continue end
+            -- Wall Check
+            if getgenv().Aimbot.WallCheck then
+                local raycastParams = RaycastParams.new()
+                raycastParams.FilterDescendantsInstances = {LocalPlayer.Character, character}
+                raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+                raycastParams.IgnoreWater = true
+                
+                local rayResult = Workspace:Raycast(
+                    Camera.CFrame.Position,
+                    (aimPart.Position - Camera.CFrame.Position).Unit * distance,
+                    raycastParams
+                )
+                
+                if rayResult then continue end
+            end
         end
         
-        -- Visible Check (simple version)
+        -- Visible Check
         if getgenv().Aimbot.VisibleCheck then
             local screenPos, onScreen = Camera:WorldToViewportPoint(aimPart.Position)
             if not onScreen then continue end
@@ -174,14 +179,7 @@ AimbotBox:AddToggle('AimbotEnabled', {
 
 AimbotBox:AddDivider()
 
-AimbotBox:AddLabel('Trigger: Right Click'):AddKeyPicker('AimbotKey', {
-    Default = 'MouseButton2',
-    Text = 'Aim Key',
-    Mode = 'Hold',
-    Callback = function()
-        -- Handled in main loop
-    end
-})
+AimbotBox:AddLabel('Hold Right Click to Aim')
 
 AimbotBox:AddDropdown('AimPart', {
     Values = {'Head', 'Torso', 'HumanoidRootPart', 'UpperTorso', 'LowerTorso'},
@@ -201,7 +199,9 @@ AimbotBox:AddSlider('AimbotFOV', {
     Rounding = 0,
     Callback = function(Value)
         getgenv().Aimbot.FOV = Value
-        FOVCircle.Radius = Value
+        if FOVCircle then
+            FOVCircle.Radius = Value
+        end
     end
 })
 
@@ -296,7 +296,9 @@ AimbotVisualBox:AddToggle('ShowFOV', {
     Default = true,
     Callback = function(Value)
         getgenv().Aimbot.ShowFOV = Value
-        FOVCircle.Visible = Value
+        if FOVCircle then
+            FOVCircle.Visible = Value and getgenv().Aimbot.Enabled
+        end
     end
 })
 
@@ -305,7 +307,9 @@ AimbotVisualBox:AddToggle('FOVFilled', {
     Default = false,
     Callback = function(Value)
         getgenv().Aimbot.FOVFilled = Value
-        FOVCircle.Filled = Value
+        if FOVCircle then
+            FOVCircle.Filled = Value
+        end
     end
 })
 
@@ -317,7 +321,9 @@ AimbotVisualBox:AddSlider('FOVTransparency', {
     Rounding = 0,
     Callback = function(Value)
         getgenv().Aimbot.FOVTransparency = Value / 100
-        FOVCircle.Transparency = 1 - (Value / 100)
+        if FOVCircle then
+            FOVCircle.Transparency = 1 - (Value / 100)
+        end
     end
 })
 
@@ -326,7 +332,9 @@ AimbotVisualBox:AddLabel('FOV Color'):AddColorPicker('FOVColor', {
     Title = 'FOV Circle Color',
     Callback = function(Value)
         getgenv().Aimbot.FOVColor = Value
-        FOVCircle.Color = Value
+        if FOVCircle then
+            FOVCircle.Color = Value
+        end
     end
 })
 
@@ -355,6 +363,8 @@ AimbotVisualBox:AddLabel('Highlight Color'):AddColorPicker('HighlightColor', {
 AimbotVisualBox:AddDivider()
 
 AimbotVisualBox:AddLabel('Current Target: None')
+
+AimbotVisualBox:AddLabel('Status: Idle'):AddLabel('AimbotStatus')
 
 -- ==================== PLAYER TAB ====================
 local MovementBox = Tabs.Player:AddLeftGroupbox('Movement')
@@ -537,12 +547,10 @@ local function CreateESP(player)
     local rootPart = character:FindFirstChild("HumanoidRootPart")
     if not rootPart then return end
     
-    -- Remove old ESP
     if character:FindFirstChild("ESPHighlight") then
         character.ESPHighlight:Destroy()
     end
     
-    -- Create Highlight for Box
     local highlight = Instance.new("Highlight")
     highlight.Name = "ESPHighlight"
     highlight.Parent = character
@@ -552,7 +560,6 @@ local function CreateESP(player)
     highlight.OutlineTransparency = 0
     highlight.Enabled = false
     
-    -- Create BillboardGui for Name/Health/Distance
     local head = character:FindFirstChild("Head")
     if head and not head:FindFirstChild("ESPBillboard") then
         local billboard = Instance.new("BillboardGui")
@@ -705,11 +712,9 @@ CameraBox:AddToggle('ThirdPerson', {
 
 -- ==================== MISC TAB ====================
 local TeleportBox = Tabs.Misc:AddLeftGroupbox('Teleport')
-local RecentPlayersBox = Tabs.Misc:AddLeftGroupbox('Recent Players')
 local GameBox = Tabs.Misc:AddRightGroupbox('Game')
 local UtilityBox = Tabs.Misc:AddRightGroupbox('Utility')
 
--- Function to get all players
 local function GetPlayerList()
     local playerList = {}
     for _, player in pairs(Players:GetPlayers()) do
@@ -720,10 +725,8 @@ local function GetPlayerList()
     return playerList
 end
 
--- Store selected player
 getgenv().SelectedPlayer = nil
 
--- Create Dropdown for Player Selection
 local PlayerDropdown = TeleportBox:AddDropdown('PlayerSelect', {
     Values = GetPlayerList(),
     Default = 1,
@@ -734,7 +737,6 @@ local PlayerDropdown = TeleportBox:AddDropdown('PlayerSelect', {
     end
 })
 
--- Refresh Player List
 TeleportBox:AddButton({
     Text = 'Refresh Player List',
     Func = function()
@@ -747,7 +749,6 @@ TeleportBox:AddButton({
     end
 })
 
--- Teleport to Selected Player
 TeleportBox:AddButton({
     Text = 'Teleport to Selected',
     Func = function()
@@ -791,146 +792,6 @@ TeleportBox:AddButton({
     end
 })
 
--- ==================== RECENT PLAYERS ====================
-getgenv().RecentPlayers = getgenv().RecentPlayers or {}
-getgenv().SelectedRecentPlayer = nil
-
-local function GetRecentPlayers()
-    local success, result = pcall(function()
-        local HttpService = game:GetService("HttpService")
-        local userId = LocalPlayer.UserId
-        
-        local recentList = {}
-        
-        for _, player in pairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer then
-                table.insert(recentList, {
-                    Name = player.Name,
-                    UserId = player.UserId,
-                    DisplayName = player.DisplayName,
-                    Status = "In This Server"
-                })
-            end
-        end
-        
-        return recentList
-    end)
-    
-    if success and result then
-        return result
-    else
-        return {}
-    end
-end
-
-local function JoinPlayerServer(userId)
-    local success, result = pcall(function()
-        local HttpService = game:GetService("HttpService")
-        
-        local url = string.format("https://presence.roblox.com/v1/presence/users")
-        local response = HttpService:JSONDecode(
-            game:HttpPost(url, HttpService:JSONEncode({
-                userIds = {userId}
-            }))
-        )
-        
-        if response and response.userPresences and #response.userPresences > 0 then
-            local presence = response.userPresences[1]
-            
-            if presence.userPresenceType == 2 then
-                local placeId = presence.placeId
-                local jobId = presence.gameId
-                
-                if placeId and jobId then
-                    Library:Notify('Joining player server...', 2)
-                    wait(0.5)
-                    game:GetService("TeleportService"):TeleportToPlaceInstance(placeId, jobId, LocalPlayer)
-                    return true
-                end
-            else
-                Library:Notify('Player is not in game!', 3)
-                return false
-            end
-        end
-    end)
-    
-    if not success then
-        Library:Notify('Failed to join player server!', 3)
-    end
-end
-
-local function UpdateRecentPlayers()
-    local recentPlayers = GetRecentPlayers()
-    local nameList = {}
-    
-    getgenv().RecentPlayers = recentPlayers
-    
-    for _, player in pairs(recentPlayers) do
-        table.insert(nameList, player.Name .. " (" .. player.Status .. ")")
-    end
-    
-    if #nameList > 0 then
-        Options.RecentPlayerSelect:SetValues(nameList)
-        Options.RecentPlayerSelect:SetValue(nameList[1])
-    else
-        Options.RecentPlayerSelect:SetValues({"No recent players"})
-    end
-    
-    return #nameList
-end
-
-RecentPlayersBox:AddDropdown('RecentPlayerSelect', {
-    Values = {"Click refresh to load..."},
-    Default = 1,
-    Multi = false,
-    Text = 'Select Recent Player',
-    Callback = function(Value)
-        local playerName = Value:match("^(.+)%s%(")
-        if playerName then
-            for _, player in pairs(getgenv().RecentPlayers) do
-                if player.Name == playerName then
-                    getgenv().SelectedRecentPlayer = player
-                    break
-                end
-            end
-        end
-    end
-})
-
-RecentPlayersBox:AddButton({
-    Text = 'Refresh Recent Players',
-    Func = function()
-        local count = UpdateRecentPlayers()
-        Library:Notify('Found ' .. count .. ' recent players', 2)
-    end,
-    Tooltip = 'Update the recent players list'
-})
-
-RecentPlayersBox:AddButton({
-    Text = 'Join Selected Player',
-    Func = function()
-        if getgenv().SelectedRecentPlayer then
-            local player = getgenv().SelectedRecentPlayer
-            
-            if player.Status == "In This Server" then
-                local targetPlayer = Players:FindFirstChild(player.Name)
-                if targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
-                    LocalPlayer.Character.HumanoidRootPart.CFrame = targetPlayer.Character.HumanoidRootPart.CFrame
-                    Library:Notify('Teleported to ' .. player.Name, 2)
-                end
-            else
-                JoinPlayerServer(player.UserId)
-            end
-        else
-            Library:Notify('Please select a player first!', 3)
-        end
-    end,
-    Tooltip = 'Join or teleport to selected player'
-})
-
-RecentPlayersBox:AddLabel('Note: Only shows current server')
-RecentPlayersBox:AddLabel('players due to API limitations')
-
 -- Game
 GameBox:AddButton({
     Text = 'Rejoin Same Server',
@@ -942,98 +803,8 @@ GameBox:AddButton({
         else
             game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
         end
-    end,
-    Tooltip = 'Rejoin to this exact server'
-})
-
-GameBox:AddButton({
-    Text = 'Join Another Server',
-    Func = function()
-        local currentJobId = game.JobId
-        local PlaceId = game.PlaceId
-        
-        Library:Notify('Finding another server...', 2)
-        
-        local success, servers = pcall(function()
-            return game:GetService('HttpService'):JSONDecode(
-                game:HttpGet('https://games.roblox.com/v1/games/' .. PlaceId .. '/servers/Public?sortOrder=Asc&limit=100')
-            )
-        end)
-        
-        if success and servers and servers.data then
-            for _, server in pairs(servers.data) do
-                if server.id ~= currentJobId and tonumber(server.playing) < tonumber(server.maxPlayers) then
-                    Library:Notify('Joining different server...', 2)
-                    wait(0.5)
-                    game:GetService("TeleportService"):TeleportToPlaceInstance(PlaceId, server.id, LocalPlayer)
-                    return
-                end
-            end
-            Library:Notify('No other servers available!', 3)
-        else
-            Library:Notify('Failed to get server list!', 3)
-        end
-    end,
-    Tooltip = 'Join a different server (not current one)'
-})
-
-GameBox:AddButton({
-    Text = 'Rejoin (Any Server)',
-    Func = function()
-        LocalPlayer:Kick("\nRejoining...")
-        wait()
-        game:GetService("TeleportService"):Teleport(game.PlaceId, LocalPlayer)
-    end,
-    Tooltip = 'Rejoin to any available server'
-})
-
-GameBox:AddDivider()
-
-getgenv().CustomJobId = ""
-
-GameBox:AddInput('CustomJobID', {
-    Default = '',
-    Numeric = false,
-    Finished = false,
-    Text = 'Custom Job ID',
-    Tooltip = 'Enter JobId to join specific server',
-    Placeholder = 'Paste Job ID here...',
-    Callback = function(Value)
-        getgenv().CustomJobId = Value
-        if Value ~= "" then
-            Library:Notify('Job ID saved: ' .. Value:sub(1, 15) .. '...', 2)
-        end
     end
 })
-
-GameBox:AddButton({
-    Text = 'Join Server (JobId)',
-    Func = function()
-        local jobId = getgenv().CustomJobId
-        
-        if jobId and jobId ~= "" and #jobId > 10 then
-            Library:Notify('Joining server...', 2)
-            wait(0.5)
-            game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, jobId, LocalPlayer)
-        else
-            Library:Notify('Please enter a valid JobId first!', 3)
-        end
-    end,
-    Tooltip = 'Join server using the JobId above'
-})
-
-GameBox:AddButton({
-    Text = 'Copy Current Job ID',
-    Func = function()
-        setclipboard(game.JobId)
-        Options.CustomJobID:SetValue(game.JobId)
-        getgenv().CustomJobId = game.JobId
-        Library:Notify('Job ID copied and loaded!', 2)
-    end,
-    Tooltip = 'Copy this server JobId'
-})
-
-GameBox:AddDivider()
 
 GameBox:AddButton({
     Text = 'Server Hop',
@@ -1042,7 +813,6 @@ GameBox:AddButton({
         local AllIDs = {}
         local foundAnything = ""
         local actualHour = os.date("!*t").hour
-        local Deleted = false
         
         local File = pcall(function()
             AllIDs = game:GetService('HttpService'):JSONDecode(readfile("NotSameServers.json"))
@@ -1108,7 +878,6 @@ GameBox:AddButton({
 GameBox:AddDivider()
 
 GameBox:AddLabel('Place ID: ' .. game.PlaceId)
-GameBox:AddLabel('Current Job ID: ' .. game.JobId:sub(1, 20) .. '...')
 
 -- Utility
 UtilityBox:AddButton({
@@ -1193,9 +962,11 @@ end)
 RunService.RenderStepped:Connect(function()
     pcall(function()
         -- Update FOV Circle Position
-        local mousePos = UserInputService:GetMouseLocation()
-        FOVCircle.Position = mousePos
-        FOVCircle.Visible = getgenv().Aimbot.ShowFOV and getgenv().Aimbot.Enabled
+        if FOVCircle then
+            local mousePos = UserInputService:GetMouseLocation()
+            FOVCircle.Position = mousePos
+            FOVCircle.Visible = getgenv().Aimbot.ShowFOV and getgenv().Aimbot.Enabled
+        end
         
         -- Check if right click is held
         local isRightClickHeld = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
@@ -1210,17 +981,6 @@ RunService.RenderStepped:Connect(function()
                 local aimPart = target.Character:FindFirstChild(getgenv().Aimbot.AimPart)
                 
                 if aimPart then
-                    -- Update target label
-                    for _, v in pairs(Tabs.Combat:GetChildren()) do
-                        if v.Name == "AimbotVisualBox" then
-                            for _, label in pairs(v:GetDescendants()) do
-                                if label:IsA("TextLabel") and label.Text:find("Current Target:") then
-                                    label.Text = "Current Target: " .. target.Name
-                                end
-                            end
-                        end
-                    end
-                    
                     -- Apply highlight to target
                     if getgenv().Aimbot.TargetHighlight then
                         if not TargetHighlight or TargetHighlight.Parent ~= target.Character then
@@ -1243,17 +1003,6 @@ RunService.RenderStepped:Connect(function()
                     AimAt(targetPos)
                 end
             else
-                -- Clear target label
-                for _, v in pairs(Tabs.Combat:GetChildren()) do
-                    if v.Name == "AimbotVisualBox" then
-                        for _, label in pairs(v:GetDescendants()) do
-                            if label:IsA("TextLabel") and label.Text:find("Current Target:") then
-                                label.Text = "Current Target: None"
-                            end
-                        end
-                    end
-                end
-                
                 -- Remove highlight
                 if TargetHighlight then
                     TargetHighlight:Destroy()
@@ -1263,17 +1012,6 @@ RunService.RenderStepped:Connect(function()
         else
             getgenv().Aimbot.IsAiming = false
             getgenv().Aimbot.CurrentTarget = nil
-            
-            -- Clear target label when not aiming
-            for _, v in pairs(Tabs.Combat:GetChildren()) do
-                if v.Name == "AimbotVisualBox" then
-                    for _, label in pairs(v:GetDescendants()) do
-                        if label:IsA("TextLabel") and label.Text:find("Current Target:") then
-                            label.Text = "Current Target: None"
-                        end
-                    end
-                end
-            end
             
             -- Remove highlight when not aiming
             if TargetHighlight then
@@ -1408,5 +1146,16 @@ end)
 
 -- Load notification
 Library:Notify('drax universal v1.0 + Aimbot loaded!', 3)
-print('drax universal v1.0 + Aimbot | All features loaded!')
-print('Aimbot: Right Click to aim at closest target in FOV')
+print('===========================================')
+print('drax universal v1.0 + Aimbot')
+print('All features loaded successfully!')
+print('Aimbot: Hold Right Click to aim')
+print('===========================================')
+
+-- Debug info
+if FOVCircle then
+    print('[DEBUG] FOV Circle: Loaded')
+else
+    print('[DEBUG] FOV Circle: Not available (Drawing library not supported)')
+    Library:Notify('Note: FOV Circle disabled (executor limitation)', 3)
+end
