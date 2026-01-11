@@ -181,6 +181,46 @@ AimbotBox:AddDivider()
 
 AimbotBox:AddLabel('Hold Right Click to Aim')
 
+AimbotBox:AddLabel('Alternative Keybind'):AddKeyPicker('AimbotAltKey', {
+    Default = 'E',
+    Text = 'Alt Aim Key',
+    Mode = 'Hold',
+})
+
+AimbotBox:AddButton({
+    Text = 'Test Aimbot (Debug)',
+    Func = function()
+        print('=== AIMBOT DEBUG TEST ===')
+        print('Enabled:', getgenv().Aimbot.Enabled)
+        print('FOV:', getgenv().Aimbot.FOV)
+        print('Smoothness:', getgenv().Aimbot.Smoothness)
+        print('Aim Part:', getgenv().Aimbot.AimPart)
+        
+        local target = GetClosestPlayerToCursor()
+        if target then
+            print('✓ Target Found:', target.Name)
+            if target.Character then
+                print('✓ Character exists')
+                local part = target.Character:FindFirstChild(getgenv().Aimbot.AimPart)
+                if part then
+                    print('✓ Aim part exists:', getgenv().Aimbot.AimPart)
+                    Library:Notify('Target: ' .. target.Name .. ' - Ready!', 2)
+                else
+                    print('✗ Aim part NOT found:', getgenv().Aimbot.AimPart)
+                    Library:Notify('Aim part not found! Try different part', 3)
+                end
+            else
+                print('✗ Character does not exist')
+            end
+        else
+            print('✗ No target in FOV')
+            Library:Notify('No target in FOV! Increase FOV or get closer', 3)
+        end
+        print('========================')
+    end,
+    Tooltip = 'Test if aimbot can find targets'
+})
+
 AimbotBox:AddDropdown('AimPart', {
     Values = {'Head', 'Torso', 'HumanoidRootPart', 'UpperTorso', 'LowerTorso'},
     Default = 1,
@@ -958,8 +998,11 @@ end)
 
 -- ==================== MAIN LOOPS ====================
 
--- Aimbot Loop
-RunService.RenderStepped:Connect(function()
+-- Aimbot Loop with Debug
+local AimbotConnection = nil
+local debugPrinted = false
+
+AimbotConnection = RunService.RenderStepped:Connect(function()
     pcall(function()
         -- Update FOV Circle Position
         if FOVCircle then
@@ -968,10 +1011,32 @@ RunService.RenderStepped:Connect(function()
             FOVCircle.Visible = getgenv().Aimbot.ShowFOV and getgenv().Aimbot.Enabled
         end
         
-        -- Check if right click is held
-        local isRightClickHeld = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+        if not getgenv().Aimbot.Enabled then
+            return
+        end
         
-        if getgenv().Aimbot.Enabled and isRightClickHeld then
+        -- Check if right click is held (Multiple methods for compatibility)
+        local isRightClickHeld = false
+        
+        -- Method 1: IsMouseButtonPressed
+        if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+            isRightClickHeld = true
+        end
+        
+        -- Method 2: Alternative keybind check
+        if Options.AimbotAltKey and Options.AimbotAltKey:GetState() then
+            isRightClickHeld = true
+        end
+        
+        -- Debug: Print once when aiming starts
+        if isRightClickHeld and not debugPrinted then
+            print('[AIMBOT] Aim Key Detected - Searching for targets...')
+            debugPrinted = true
+        elseif not isRightClickHeld then
+            debugPrinted = false
+        end
+        
+        if isRightClickHeld then
             getgenv().Aimbot.IsAiming = true
             
             local target = GetClosestPlayerToCursor()
@@ -979,6 +1044,14 @@ RunService.RenderStepped:Connect(function()
             
             if target and target.Character then
                 local aimPart = target.Character:FindFirstChild(getgenv().Aimbot.AimPart)
+                
+                -- Fallback to other parts if selected part doesn't exist
+                if not aimPart then
+                    aimPart = target.Character:FindFirstChild("Head") or 
+                              target.Character:FindFirstChild("HumanoidRootPart") or
+                              target.Character:FindFirstChild("Torso") or
+                              target.Character:FindFirstChild("UpperTorso")
+                end
                 
                 if aimPart then
                     -- Apply highlight to target
@@ -1000,7 +1073,22 @@ RunService.RenderStepped:Connect(function()
                     
                     -- Aim at predicted position
                     local targetPos = GetPredictedPosition(aimPart)
-                    AimAt(targetPos)
+                    
+                    -- Apply smoothing
+                    local currentCam = Camera.CFrame
+                    local targetCam = CFrame.new(currentCam.Position, targetPos)
+                    
+                    -- Use smoothness (0 = instant, 1 = no aim)
+                    local smoothness = math.clamp(getgenv().Aimbot.Smoothness, 0, 0.99)
+                    local alpha = 1 - smoothness
+                    
+                    -- Apply the aim
+                    Camera.CFrame = currentCam:Lerp(targetCam, alpha)
+                    
+                    -- Debug print target name once
+                    if not debugPrinted then
+                        print('[AIMBOT] Locked on:', target.Name)
+                    end
                 end
             else
                 -- Remove highlight
@@ -1020,6 +1108,29 @@ RunService.RenderStepped:Connect(function()
             end
         end
     end)
+end)
+
+-- Alternative Input Detection (Backup method)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        if getgenv().Aimbot.Enabled then
+            print('[AIMBOT] Right Click BEGAN - Aimbot Active')
+        end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input, gameProcessed)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        if getgenv().Aimbot.Enabled then
+            print('[AIMBOT] Right Click ENDED')
+            if TargetHighlight then
+                TargetHighlight:Destroy()
+                TargetHighlight = nil
+            end
+        end
+    end
 end)
 
 -- Movement Loop
